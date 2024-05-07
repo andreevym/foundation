@@ -44,18 +44,13 @@ func BatcherHandler(
 		return nil, fmt.Errorf("failed to create batchInsertHandler: %w", err)
 	}
 
-	if err := batcher.ValidateCreator(creatorSKI, hashedCert); err != nil {
+	if err = batcher.ValidateCreator(creatorSKI, hashedCert); err != nil {
 		return nil, fmt.Errorf("failed to validate creator: %w", err)
 	}
 
-	batchResponse, batchEvent, err := batcher.HandleBatch(traceCtx, batchDTO.Requests)
+	batchEvent, err := batcher.HandleBatch(traceCtx, batchDTO.Requests)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute: %w", err)
-	}
-
-	responseData, err := json.Marshal(batchResponse)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal batchResponse: %w", err)
 	}
 
 	eventData, err := pb.Marshal(batchEvent)
@@ -66,14 +61,14 @@ func BatcherHandler(
 		return nil, fmt.Errorf("failed to set batchEvent: %w", err)
 	}
 
-	return responseData, nil
+	return json.Marshal(batchEvent)
 }
 
 type Batcher struct {
 	batchCacheStub *cachestub.BatchCacheStub
 	cc             *ChainCode
 	cfgBytes       []byte
-	batcherSKI     string
+	ski            string
 }
 
 func NewBatcher(stub shim.ChaincodeStubInterface, cfgBytes []byte, cc *ChainCode) (Batcher, error) {
@@ -87,18 +82,18 @@ func NewBatcher(stub shim.ChaincodeStubInterface, cfgBytes []byte, cc *ChainCode
 	return Batcher{
 		batchCacheStub: batchCacheStub,
 		cfgBytes:       cfgBytes,
-		batcherSKI:     contractCfg.GetBatcherSKI(),
+		ski:            contractCfg.GetBatcherSKI(),
 		cc:             cc,
 	}, nil
 }
 
 func (b *Batcher) ValidateCreator(creatorSKI [32]byte, hashedCert [32]byte) error {
-	batcherSKIBytes, err := hex.DecodeString(b.batcherSKI)
+	skiBytes, err := hex.DecodeString(b.ski)
 	if err != nil {
 		return fmt.Errorf("failed to decode hex batcherSKI: %w", err)
 	}
 
-	err = hlfcreator.ValidateSKI(batcherSKIBytes, creatorSKI, hashedCert)
+	err = hlfcreator.ValidateSKI(skiBytes, creatorSKI, hashedCert)
 	if err != nil {
 		return fmt.Errorf("unauthorized: batcherSKI is not equal creatorSKI and hashedCert: %w", err)
 	}
@@ -106,39 +101,37 @@ func (b *Batcher) ValidateCreator(creatorSKI [32]byte, hashedCert [32]byte) erro
 	return nil
 }
 
-func (b *Batcher) HandleBatch(traceCtx telemetry.TraceContext, batcherRequests []BatcherRequest) (
-	*proto.BatcherBatchResponse,
+func (b *Batcher) HandleBatch(
+	traceCtx telemetry.TraceContext,
+	requests []BatcherRequest,
+) (
 	*proto.BatcherBatchEvent,
 	error,
 ) {
-	response := &proto.BatcherBatchResponse{}
 	event := &proto.BatcherBatchEvent{}
 
-	for _, request := range batcherRequests {
+	for _, request := range requests {
 		var (
-			txResponse   *proto.BatcherTxResponse
 			batchTxEvent *proto.BatcherTxEvent
 		)
 
 		switch request.BatcherRequestType {
 		case TxBatcherRequestType:
-			txResponse, batchTxEvent = b.HandleRequest(traceCtx, request, b.batchCacheStub, b.cfgBytes)
+			batchTxEvent = b.HandleRequest(traceCtx, request, b.batchCacheStub, b.cfgBytes)
 		default:
-			txResponse, batchTxEvent = txResultWithError(
-				txResponse,
+			batchTxEvent = txResultWithError(
 				batchTxEvent,
 				fmt.Errorf("unsupported batcher request type %s request.BatcherRequestID %s", request.BatcherRequestType, request.BatcherRequestID),
 			)
 		}
-		response.BatcherTxResponses = append(response.BatcherTxResponses, txResponse)
 		event.BatchTxEvents = append(event.BatchTxEvents, batchTxEvent)
 	}
 
 	if err := b.batchCacheStub.Commit(); err != nil {
-		return response, event, fmt.Errorf("failed to commit changes using batchCacheStub: %w", err)
+		return event, fmt.Errorf("failed to commit changes using batchCacheStub: %w", err)
 	}
 
-	return response, event, nil
+	return event, nil
 }
 
 type BatcherRequestType string
@@ -157,26 +150,15 @@ type BatcherBatchExecuteRequestDTO struct {
 	Requests []BatcherRequest `json:"requests"`
 }
 
-type BatcherBatchExecuteResponseDTO struct {
-	TxResponses []*proto.BatcherTxResponse
-}
-
 func txResultWithError(
-	txResponse *proto.BatcherTxResponse,
 	batchTxEvent *proto.BatcherTxEvent,
 	err error,
-) (
-	*proto.BatcherTxResponse,
-	*proto.BatcherTxEvent,
-) {
+) *proto.BatcherTxEvent {
 	responseError := &proto.ResponseError{Error: err.Error()}
-	if txResponse != nil {
-		txResponse.Error = responseError
-	}
 	if batchTxEvent != nil {
 		batchTxEvent.Error = responseError
 	}
-	return txResponse, batchTxEvent
+	return batchTxEvent
 }
 
 func (b *Batcher) validatedTxSenderMethodAndArgs(
@@ -215,16 +197,9 @@ func (b *Batcher) HandleRequest(
 	request BatcherRequest,
 	stub *cachestub.BatchCacheStub,
 	cfgBytes []byte,
-) (
-	*proto.BatcherTxResponse,
-	*proto.BatcherTxEvent,
-) {
+) *proto.BatcherTxEvent {
 	var (
-		txCacheStub = stub.NewTxCacheStub(request.BatcherRequestID)
-		txResponse  = &proto.BatcherTxResponse{
-			BatcherRequestId: request.BatcherRequestID,
-			Method:           request.Method,
-		}
+		txCacheStub  = stub.NewTxCacheStub(request.BatcherRequestID)
 		batchTxEvent = &proto.BatcherTxEvent{
 			BatcherRequestId: request.BatcherRequestID,
 			Method:           request.Method,
@@ -232,20 +207,20 @@ func (b *Batcher) HandleRequest(
 	)
 
 	if err := b.saveBatchRequestID(request.BatcherRequestID); err != nil {
-		return txResultWithError(txResponse, batchTxEvent, err)
+		return txResultWithError(batchTxEvent, err)
 	}
 
 	senderAddress, method, args, err := b.validatedTxSenderMethodAndArgs(stub, request)
 	if err != nil {
-		return txResultWithError(txResponse, batchTxEvent, err)
+		return txResultWithError(batchTxEvent, err)
 	}
 
 	batchTxEvent.Result, err = b.cc.callMethod(traceCtx, txCacheStub, method, senderAddress, args, cfgBytes)
 	if err != nil {
-		return txResultWithError(txResponse, batchTxEvent, err)
+		return txResultWithError(batchTxEvent, err)
 	}
 
-	txResponse.Writes, batchTxEvent.Events = txCacheStub.Commit()
+	_, batchTxEvent.Events = txCacheStub.Commit()
 
 	sort.Slice(txCacheStub.Accounting, func(i, j int) bool {
 		return strings.Compare(txCacheStub.Accounting[i].String(), txCacheStub.Accounting[j].String()) < 0
@@ -253,7 +228,7 @@ func (b *Batcher) HandleRequest(
 
 	batchTxEvent.Accounting = txCacheStub.Accounting
 
-	return txResponse, batchTxEvent
+	return batchTxEvent
 }
 
 func (b *Batcher) saveBatchRequestID(requestID string) error {

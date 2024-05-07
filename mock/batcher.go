@@ -64,14 +64,14 @@ func (w *Wallet) BatcherSignedInvokeWithTxEventReturned(ch string, fn string, ar
 		return nil, fmt.Errorf("failed to invoke method %s, status: '%v', message: '%s'", core.BatcherBatchExecute, peerResponse.GetStatus(), peerResponse.GetMessage())
 	}
 
-	var batchResponse proto.BatcherBatchResponse
+	var batchResponse proto.BatcherBatchEvent
 	err = json.Unmarshal(peerResponse.GetPayload(), &batchResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BatcherBatchExecuteResponseDTO: %w", err)
 	}
 
-	if len(batchResponse.GetBatcherTxResponses()) != 1 {
-		return nil, fmt.Errorf("failed to handle response, current response len is %d", len(batchResponse.GetBatcherTxResponses()))
+	if len(batchResponse.GetBatchTxEvents()) != 1 {
+		return nil, fmt.Errorf("failed to handle response, current response len is %d", len(batchResponse.GetBatchTxEvents()))
 	}
 
 	e := <-w.ledger.stubs[ch].ChaincodeEventsChannel

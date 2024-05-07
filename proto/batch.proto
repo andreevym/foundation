@@ -98,17 +98,6 @@ message BatchTxEvent {
     repeated AccountingRecord accounting = 7;
 }
 
-message BatcherTxResponse {
-    string batcher_request_id    = 1;
-    string method                = 2;
-    ResponseError error          = 3;
-    repeated WriteElement writes = 4;
-}
-
-message BatcherBatchResponse {
-    repeated BatcherTxResponse batcher_tx_responses = 1;
-}
-
 message BatcherTxEvent {
     string batcher_request_id            = 1;
     string method                        = 2;
