@@ -98,19 +98,6 @@ message BatchTxEvent {
     repeated AccountingRecord accounting = 7;
 }
 
-message BatcherTxEvent {
-    string batcher_request_id            = 1;
-    string method                        = 2;
-    ResponseError error                  = 3;
-    bytes result                         = 4;
-    repeated Event events                = 6;
-    repeated AccountingRecord accounting = 7;
-}
-
-message BatcherBatchEvent {
-    repeated BatcherTxEvent batchTxEvents = 1;
-}
-
 message BatchEvent {
     repeated BatchTxEvent events = 1;
 }
@@ -121,6 +108,27 @@ message BatchResponse {
     repeated SwapResponse swap_responses     = 3;
     repeated SwapResponse swap_key_responses = 4;
     repeated MultiSwap created_multi_swap = 5;
+}
+
+message BatcherTxResponse {
+    string request_id                    = 1;
+    string method                        = 2;
+    ResponseError error                  = 3;
+    bytes result                         = 4;
+    repeated AccountingRecord accounting = 5;
+}
+
+message BatcherBatchResponse {
+    repeated BatcherTxResponse batchTxResponses = 1;
+}
+
+message BatcherTxEvent {
+    string request_id     = 1;
+    repeated Event events = 2;
+}
+
+message BatcherBatchEvent {
+    repeated BatcherTxEvent events = 1;
 }
 
 message Nested {

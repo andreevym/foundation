@@ -22,6 +22,31 @@ const (
 	TxBatcherRequestType     BatcherRequestType = "tx"
 )
 
+type (
+	BatcherRequestType string
+
+	// BatcherRequest represents the data required to execute a Hyperledger Fabric chaincode.
+	BatcherRequest struct {
+		BatcherRequestID   string             `json:"batcher_request_id"` // BatcherRequestID batcher request id
+		Channel            string             `json:"channel"`            // Channel on which the chaincode will be invoked
+		Chaincode          string             `json:"chaincode"`          // Name of the chaincode to invoke
+		Method             string             `json:"function"`           // Name of the chaincode function to invoke
+		Args               []string           `json:"args"`               // Arguments to pass to the chaincode function
+		BatcherRequestType BatcherRequestType `json:"batcherRequestType"` // tx, swaps, swaps_keys, multi_swaps, multi_swaps_keys
+	}
+
+	BatcherBatchExecuteRequestDTO struct {
+		Requests []BatcherRequest `json:"requests"`
+	}
+
+	Batcher struct {
+		batchCacheStub *cachestub.BatchCacheStub
+		cc             *ChainCode
+		cfgBytes       []byte
+		ski            string
+	}
+)
+
 func BatcherHandler(
 	traceCtx telemetry.TraceContext,
 	stub shim.ChaincodeStubInterface,
@@ -48,27 +73,26 @@ func BatcherHandler(
 		return nil, fmt.Errorf("failed to validate creator: %w", err)
 	}
 
-	batchEvent, err := batcher.HandleBatch(traceCtx, batchDTO.Requests)
+	batchResponse, batchEvent, err := batcher.HandleBatch(traceCtx, batchDTO.Requests)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute: %w", err)
+		return nil, fmt.Errorf("failed handling batch: %w", err)
 	}
 
 	eventData, err := pb.Marshal(batchEvent)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal batchEvent: %w", err)
+		return nil, fmt.Errorf("failed marshalling batcher event: %w", err)
 	}
+
 	if err = stub.SetEvent(BatcherBatchExecuteEvent, eventData); err != nil {
-		return nil, fmt.Errorf("failed to set batchEvent: %w", err)
+		return nil, fmt.Errorf("failed setting batch event: %w", err)
 	}
 
-	return json.Marshal(batchEvent)
-}
+	responseBytes, err := json.Marshal(batchResponse)
+	if err != nil {
+		return nil, fmt.Errorf("failed marshalling batch response: %w", err)
+	}
 
-type Batcher struct {
-	batchCacheStub *cachestub.BatchCacheStub
-	cc             *ChainCode
-	cfgBytes       []byte
-	ski            string
+	return responseBytes, nil
 }
 
 func NewBatcher(stub shim.ChaincodeStubInterface, cfgBytes []byte, cc *ChainCode) (Batcher, error) {
@@ -105,60 +129,39 @@ func (b *Batcher) HandleBatch(
 	traceCtx telemetry.TraceContext,
 	requests []BatcherRequest,
 ) (
+	*proto.BatcherBatchResponse,
 	*proto.BatcherBatchEvent,
 	error,
 ) {
-	event := &proto.BatcherBatchEvent{}
+	var (
+		response = &proto.BatcherBatchResponse{}
+		event    = &proto.BatcherBatchEvent{}
+	)
 
 	for _, request := range requests {
 		var (
-			batchTxEvent *proto.BatcherTxEvent
+			txResponse *proto.BatcherTxResponse
+			txEvent    *proto.BatcherTxEvent
 		)
 
 		switch request.BatcherRequestType {
 		case TxBatcherRequestType:
-			batchTxEvent = b.HandleRequest(traceCtx, request, b.batchCacheStub, b.cfgBytes)
+			txResponse, txEvent = b.HandleRequest(traceCtx, request, b.batchCacheStub, b.cfgBytes)
 		default:
-			batchTxEvent = txResultWithError(
-				batchTxEvent,
+			txResponse = txResponseWithError(
+				txResponse,
 				fmt.Errorf("unsupported batcher request type %s request.BatcherRequestID %s", request.BatcherRequestType, request.BatcherRequestID),
 			)
 		}
-		event.BatchTxEvents = append(event.BatchTxEvents, batchTxEvent)
+		response.BatchTxResponses = append(response.BatchTxResponses, txResponse)
+		event.Events = append(event.Events, txEvent)
 	}
 
 	if err := b.batchCacheStub.Commit(); err != nil {
-		return event, fmt.Errorf("failed to commit changes using batchCacheStub: %w", err)
+		return response, event, fmt.Errorf("failed to commit changes using batchCacheStub: %w", err)
 	}
 
-	return event, nil
-}
-
-type BatcherRequestType string
-
-// BatcherRequest represents the data required to execute a Hyperledger Fabric chaincode.
-type BatcherRequest struct {
-	BatcherRequestID   string             `json:"batcher_request_id"` // BatcherRequestID batcher request id
-	Channel            string             `json:"channel"`            // Channel on which the chaincode will be invoked
-	Chaincode          string             `json:"chaincode"`          // Name of the chaincode to invoke
-	Method             string             `json:"function"`           // Name of the chaincode function to invoke
-	Args               []string           `json:"args"`               // Arguments to pass to the chaincode function
-	BatcherRequestType BatcherRequestType `json:"batcherRequestType"` // tx, swaps, swaps_keys, multi_swaps, multi_swaps_keys
-}
-
-type BatcherBatchExecuteRequestDTO struct {
-	Requests []BatcherRequest `json:"requests"`
-}
-
-func txResultWithError(
-	batchTxEvent *proto.BatcherTxEvent,
-	err error,
-) *proto.BatcherTxEvent {
-	responseError := &proto.ResponseError{Error: err.Error()}
-	if batchTxEvent != nil {
-		batchTxEvent.Error = responseError
-	}
-	return batchTxEvent
+	return response, event, nil
 }
 
 func (b *Batcher) validatedTxSenderMethodAndArgs(
@@ -182,7 +185,7 @@ func (b *Batcher) validatedTxSenderMethodAndArgs(
 
 	args = args[:len(method.in)]
 	if senderAddress == nil {
-		return nil, nil, nil, fmt.Errorf("no sender in BatcherRequestID %s", request.BatcherRequestID)
+		return nil, nil, nil, fmt.Errorf("no sender in batch request %s", request.BatcherRequestID)
 	}
 
 	sender := types.NewSenderFromAddr((*types.Address)(senderAddress))
@@ -197,38 +200,44 @@ func (b *Batcher) HandleRequest(
 	request BatcherRequest,
 	stub *cachestub.BatchCacheStub,
 	cfgBytes []byte,
-) *proto.BatcherTxEvent {
+) (
+	*proto.BatcherTxResponse,
+	*proto.BatcherTxEvent,
+) {
 	var (
-		txCacheStub  = stub.NewTxCacheStub(request.BatcherRequestID)
-		batchTxEvent = &proto.BatcherTxEvent{
-			BatcherRequestId: request.BatcherRequestID,
-			Method:           request.Method,
+		txCacheStub = stub.NewTxCacheStub(request.BatcherRequestID)
+		txResponse  = &proto.BatcherTxResponse{
+			RequestId: request.BatcherRequestID,
+			Method:    request.Method,
+		}
+		txEvent = &proto.BatcherTxEvent{
+			RequestId: request.BatcherRequestID,
 		}
 	)
 
 	if err := b.saveBatchRequestID(request.BatcherRequestID); err != nil {
-		return txResultWithError(batchTxEvent, err)
+		return txResponseWithError(txResponse, err), txEvent
 	}
 
 	senderAddress, method, args, err := b.validatedTxSenderMethodAndArgs(stub, request)
 	if err != nil {
-		return txResultWithError(batchTxEvent, err)
+		return txResponseWithError(txResponse, err), txEvent
 	}
 
-	batchTxEvent.Result, err = b.cc.callMethod(traceCtx, txCacheStub, method, senderAddress, args, cfgBytes)
+	txResponse.Result, err = b.cc.callMethod(traceCtx, txCacheStub, method, senderAddress, args, cfgBytes)
 	if err != nil {
-		return txResultWithError(batchTxEvent, err)
+		return txResponseWithError(txResponse, err), txEvent
 	}
 
-	_, batchTxEvent.Events = txCacheStub.Commit()
+	_, txEvent.Events = txCacheStub.Commit()
 
 	sort.Slice(txCacheStub.Accounting, func(i, j int) bool {
 		return strings.Compare(txCacheStub.Accounting[i].String(), txCacheStub.Accounting[j].String()) < 0
 	})
 
-	batchTxEvent.Accounting = txCacheStub.Accounting
+	txResponse.Accounting = txCacheStub.Accounting
 
-	return batchTxEvent
+	return txResponse, txEvent
 }
 
 func (b *Batcher) saveBatchRequestID(requestID string) error {
@@ -252,4 +261,15 @@ func (b *Batcher) saveBatchRequestID(requestID string) error {
 	}
 
 	return nil
+}
+
+func txResponseWithError(
+	batchTxEvent *proto.BatcherTxResponse,
+	err error,
+) *proto.BatcherTxResponse {
+	responseError := &proto.ResponseError{Error: err.Error()}
+	if batchTxEvent != nil {
+		batchTxEvent.Error = responseError
+	}
+	return batchTxEvent
 }
