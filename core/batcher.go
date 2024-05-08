@@ -27,16 +27,41 @@ type (
 
 	// BatcherRequest represents the data required to execute a Hyperledger Fabric chaincode.
 	BatcherRequest struct {
-		BatcherRequestID   string             `json:"batcher_request_id"` // BatcherRequestID batcher request id
-		Channel            string             `json:"channel"`            // Channel on which the chaincode will be invoked
-		Chaincode          string             `json:"chaincode"`          // Name of the chaincode to invoke
-		Method             string             `json:"function"`           // Name of the chaincode function to invoke
-		Args               []string           `json:"args"`               // Arguments to pass to the chaincode function
-		BatcherRequestType BatcherRequestType `json:"batcherRequestType"` // tx, swaps, swaps_keys, multi_swaps, multi_swaps_keys
+		BatcherRequestID   string             `json:"batcher_request_id"`   // BatcherRequestID batcher request id
+		Channel            string             `json:"channel"`              // Channel on which the chaincode will be invoked
+		Chaincode          string             `json:"chaincode"`            // Name of the chaincode to invoke
+		Method             string             `json:"function"`             // Name of the chaincode function to invoke
+		Args               []string           `json:"args"`                 // Arguments to pass to the chaincode function
+		BatcherRequestType BatcherRequestType `json:"batcher_request_type"` // tx, swaps, swaps_keys, multi_swaps, multi_swaps_keys
 	}
 
 	BatcherBatchExecuteRequestDTO struct {
 		Requests []BatcherRequest `json:"requests"`
+	}
+
+	BatcherBatchExecuteResponseDTO struct {
+		Responses []*BatcherResponse `json:"responses"`
+	}
+
+	BatcherResponse struct {
+		BatcherRequestId string              `json:"batcher_request_id,omitempty"`
+		Method           string              `json:"method,omitempty"`
+		Error            *ResponseError      `json:"error,omitempty"`
+		Result           []byte              `json:"result,omitempty"`
+		Accounting       []*AccountingRecord `json:"accounting,omitempty"`
+	}
+
+	ResponseError struct {
+		Code  int32  `json:"code,omitempty"`
+		Error string `json:"error,omitempty"`
+	}
+
+	AccountingRecord struct {
+		Token     string `json:"token,omitempty"`
+		Sender    []byte `json:"sender,omitempty"`
+		Recipient []byte `json:"recipient,omitempty"`
+		Amount    []byte `json:"amount,omitempty"`
+		Reason    string `json:"reason,omitempty"`
 	}
 
 	Batcher struct {
