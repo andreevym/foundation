@@ -28,8 +28,8 @@ func (w *Wallet) BatcherSignedInvokeWithTxEventReturned(
 	fn string,
 	args ...string,
 ) (
-	*proto.BatcherTxResponse,
-	*proto.BatcherTxEvent,
+	*proto.BatcherRequestResponse,
+	*proto.BatcherRequestEvent,
 	error,
 ) {
 	err := w.verifyIncoming(ch, fn)
@@ -78,8 +78,8 @@ func (w *Wallet) BatcherSignedInvokeWithTxEventReturned(
 		return nil, nil, fmt.Errorf("failed to unmarshal BatcherBatchExecuteResponseDTO: %w", err)
 	}
 
-	if len(batchResponse.GetBatchTxResponses()) != 1 {
-		return nil, nil, fmt.Errorf("failed to handle response, current response len is %d", len(batchResponse.GetBatchTxResponses()))
+	if len(batchResponse.GetRequestResponses()) != 1 {
+		return nil, nil, fmt.Errorf("failed to handle response, current response len is %d", len(batchResponse.GetRequestResponses()))
 	}
 
 	txEvent, err := w.getBatcherTxEventFromChannelByRequestID(ch, r.BatcherRequestID)
@@ -87,7 +87,7 @@ func (w *Wallet) BatcherSignedInvokeWithTxEventReturned(
 		return nil, nil, err
 	}
 
-	response := batchResponse.GetBatchTxResponses()[0]
+	response := batchResponse.GetRequestResponses()[0]
 	if responseErr := response.GetError(); responseErr != nil {
 		return nil, nil, errors.New(responseErr.GetError())
 	}
@@ -99,7 +99,7 @@ func (w *Wallet) getBatcherTxEventFromChannelByRequestID(
 	channel string,
 	requestID string,
 ) (
-	*proto.BatcherTxEvent,
+	*proto.BatcherRequestEvent,
 	error,
 ) {
 	e := <-w.ledger.stubs[channel].ChaincodeEventsChannel
@@ -110,7 +110,7 @@ func (w *Wallet) getBatcherTxEventFromChannelByRequestID(
 			return nil, fmt.Errorf("failed to unmarshal BatcherBatchEvent: %w", err)
 		}
 		for _, ev := range events.GetEvents() {
-			if ev.GetRequestId() == requestID {
+			if ev.GetBatcherRequestId() == requestID {
 				return ev, nil
 			}
 		}

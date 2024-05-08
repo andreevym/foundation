@@ -140,8 +140,8 @@ func (b *Batcher) HandleBatch(
 
 	for _, request := range requests {
 		var (
-			txResponse *proto.BatcherTxResponse
-			txEvent    *proto.BatcherTxEvent
+			txResponse *proto.BatcherRequestResponse
+			txEvent    *proto.BatcherRequestEvent
 		)
 
 		switch request.BatcherRequestType {
@@ -153,7 +153,7 @@ func (b *Batcher) HandleBatch(
 				fmt.Errorf("unsupported batcher request type %s request.BatcherRequestID %s", request.BatcherRequestType, request.BatcherRequestID),
 			)
 		}
-		response.BatchTxResponses = append(response.BatchTxResponses, txResponse)
+		response.RequestResponses = append(response.RequestResponses, txResponse)
 		event.Events = append(event.Events, txEvent)
 	}
 
@@ -201,17 +201,17 @@ func (b *Batcher) HandleRequest(
 	stub *cachestub.BatchCacheStub,
 	cfgBytes []byte,
 ) (
-	*proto.BatcherTxResponse,
-	*proto.BatcherTxEvent,
+	*proto.BatcherRequestResponse,
+	*proto.BatcherRequestEvent,
 ) {
 	var (
 		txCacheStub = stub.NewTxCacheStub(request.BatcherRequestID)
-		txResponse  = &proto.BatcherTxResponse{
-			RequestId: request.BatcherRequestID,
-			Method:    request.Method,
+		txResponse  = &proto.BatcherRequestResponse{
+			BatcherRequestId: request.BatcherRequestID,
+			Method:           request.Method,
 		}
-		txEvent = &proto.BatcherTxEvent{
-			RequestId: request.BatcherRequestID,
+		txEvent = &proto.BatcherRequestEvent{
+			BatcherRequestId: request.BatcherRequestID,
 		}
 	)
 
@@ -264,9 +264,9 @@ func (b *Batcher) saveBatchRequestID(requestID string) error {
 }
 
 func txResponseWithError(
-	batchTxEvent *proto.BatcherTxResponse,
+	batchTxEvent *proto.BatcherRequestResponse,
 	err error,
-) *proto.BatcherTxResponse {
+) *proto.BatcherRequestResponse {
 	responseError := &proto.ResponseError{Error: err.Error()}
 	if batchTxEvent != nil {
 		batchTxEvent.Error = responseError

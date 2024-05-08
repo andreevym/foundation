@@ -110,8 +110,8 @@ message BatchResponse {
     repeated MultiSwap created_multi_swap = 5;
 }
 
-message BatcherTxResponse {
-    string request_id                    = 1;
+message BatcherRequestResponse {
+    string batcher_request_id            = 1;
     string method                        = 2;
     ResponseError error                  = 3;
     bytes result                         = 4;
@@ -119,16 +119,16 @@ message BatcherTxResponse {
 }
 
 message BatcherBatchResponse {
-    repeated BatcherTxResponse batchTxResponses = 1;
+    repeated BatcherRequestResponse requestResponses = 1;
 }
 
-message BatcherTxEvent {
-    string request_id     = 1;
+message BatcherRequestEvent {
+    string batcher_request_id     = 1;
     repeated Event events = 2;
 }
 
 message BatcherBatchEvent {
-    repeated BatcherTxEvent events = 1;
+    repeated BatcherRequestEvent events = 1;
 }
 
 message Nested {
