@@ -276,7 +276,6 @@ func (bc *BaseContract) setupTracing() {
 	th := &telemetry.TracingHandler{}
 	th.Tracer = otel.Tracer(serviceName)
 	th.Propagators = otel.GetTextMapPropagator()
-	th.TracingInit()
 
 	bc.setTracingHandler(th)
 }

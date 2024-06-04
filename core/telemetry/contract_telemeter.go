@@ -17,17 +17,6 @@ type TraceContext struct {
 type TracingHandler struct {
 	Tracer      trace.Tracer
 	Propagators propagation.TextMapPropagator
-	isInit      bool
-}
-
-// TracingIsInit checks if telemetry was initialized
-func (th *TracingHandler) TracingIsInit() bool {
-	return th.isInit
-}
-
-// TracingInit sets tracing telemetry init param as true
-func (th *TracingHandler) TracingInit() {
-	th.isInit = true
 }
 
 // StartNewSpan starts new span
