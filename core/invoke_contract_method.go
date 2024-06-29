@@ -1,7 +1,10 @@
 package core
 
 import (
+	"time"
+
 	"github.com/anoideaopen/foundation/core/contract"
+	"github.com/anoideaopen/foundation/core/logger"
 	"github.com/anoideaopen/foundation/core/telemetry"
 	"github.com/anoideaopen/foundation/proto"
 	"github.com/hyperledger/fabric-chaincode-go/shim"
@@ -37,6 +40,10 @@ func (cc *Chaincode) InvokeContractMethod(
 	sender *proto.Address,
 	args []string,
 ) ([]byte, error) {
+	start := time.Now()
+	defer func() {
+		logger.Logger().Infof("invoke contract method: tx id: %s, elapsed: %s", stub.GetTxID(), time.Since(start))
+	}()
 	_, span := cc.contract.TracingHandler().StartNewSpan(traceCtx, "chaincode.CallMethod")
 	defer span.End()
 
