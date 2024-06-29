@@ -135,7 +135,7 @@ func GetAddress(stub shim.ChaincodeStubInterface, keys string) (*pb.AclResponse,
 	}, "acl")
 
 	if resp.GetStatus() != http.StatusOK {
-		return nil, errors.New(resp.GetMessage())
+		return nil, fmt.Errorf("failed to invoke chaincode status is not valid %d: %s", resp.GetStatus(), resp.GetMessage())
 	}
 
 	if len(resp.GetPayload()) == 0 {
@@ -144,7 +144,7 @@ func GetAddress(stub shim.ChaincodeStubInterface, keys string) (*pb.AclResponse,
 
 	addrMsg := &pb.AclResponse{}
 	if err := proto.Unmarshal(resp.GetPayload(), addrMsg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal ACL response: %w", err)
 	}
 
 	return addrMsg, nil

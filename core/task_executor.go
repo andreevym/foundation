@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anoideaopen/foundation/core/cachestub"
@@ -24,8 +25,18 @@ const ExecuteTasksEvent = "executeTasks"
 
 var ErrTasksNotFound = errors.New("no tasks found")
 
+type ValidatedTx struct {
+	task          *proto.Task
+	senderAddress *proto.Address
+	method        contract.Method
+	args          []string
+	txCacheStub   *cachestub.TxCacheStub
+}
+
 // TaskExecutor handles the execution of a group of tasks.
 type TaskExecutor struct {
+	sync.Mutex
+
 	BatchCacheStub *cachestub.BatchCacheStub
 	Chaincode      *Chaincode
 	SKI            string
@@ -120,8 +131,38 @@ func (e *TaskExecutor) ExecuteTasks(
 	batchResponse := &proto.BatchResponse{}
 	batchEvent := &proto.BatchEvent{}
 
+	validatedTxs := make([]ValidatedTx, 0)
+	wg := &sync.WaitGroup{}
+
+	// init router once
+	e.Chaincode.Router()
+
 	for _, task := range tasks {
-		txResponse, txEvent := e.ExecuteTask(traceCtx, task, e.BatchCacheStub)
+		wg.Add(1)
+		go func(t *proto.Task) {
+			defer wg.Done()
+			span.AddEvent("validating tx sender method and args")
+			senderAddress, method, args, err := e.validatedTxSenderMethodAndArgs(traceCtx, e.BatchCacheStub, t)
+			if err != nil {
+				err = fmt.Errorf("failed to validate transaction sender, method, and arguments for task %s: %w", t.GetId(), err)
+				txResponses, txEvent := handleTaskError(span, t, err)
+				e.saveResult(batchResponse, txResponses, batchEvent, txEvent)
+			} else {
+				validatedTx := ValidatedTx{
+					task:          t,
+					senderAddress: senderAddress,
+					method:        method,
+					args:          args,
+					txCacheStub:   e.BatchCacheStub.NewTxCacheStub(t.GetId()),
+				}
+				validatedTxs = append(validatedTxs, validatedTx)
+			}
+		}(task)
+	}
+	wg.Wait()
+
+	for _, validatedTx := range validatedTxs {
+		txResponse, txEvent := e.ExecuteTask(traceCtx, validatedTx)
 		batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
 		batchEvent.Events = append(batchEvent.Events, txEvent)
 	}
@@ -131,6 +172,13 @@ func (e *TaskExecutor) ExecuteTasks(
 	}
 
 	return batchResponse, batchEvent, nil
+}
+
+func (e *TaskExecutor) saveResult(batchResponse *proto.BatchResponse, txResponses *proto.TxResponse, batchEvent *proto.BatchEvent, txEvent *proto.BatchTxEvent) {
+	e.Lock()
+	defer e.Unlock()
+	batchResponse.TxResponses = append(batchResponse.TxResponses, txResponses)
+	batchEvent.Events = append(batchEvent.Events, txEvent)
 }
 
 // validatedTxSenderMethodAndArgs validates the sender, method, and arguments for a transaction.
@@ -188,54 +236,44 @@ func (e *TaskExecutor) validatedTxSenderMethodAndArgs(
 // ExecuteTask processes an individual task, returning a transaction response and event.
 func (e *TaskExecutor) ExecuteTask(
 	traceCtx telemetry.TraceContext,
-	task *proto.Task,
-	batchCacheStub *cachestub.BatchCacheStub,
+	validatedTx ValidatedTx,
 ) (*proto.TxResponse, *proto.BatchTxEvent) {
 	traceCtx, span := e.TracingHandler.StartNewSpan(traceCtx, "TaskExecutor.ExecuteTasks")
 	defer span.End()
-
 	log := logger.Logger()
 	start := time.Now()
-	span.SetAttributes(attribute.String("task_method", task.GetMethod()))
-	span.SetAttributes(attribute.StringSlice("task_args", task.GetArgs()))
-	span.SetAttributes(attribute.String("task_id", task.GetId()))
+	span.SetAttributes(
+		attribute.String("task_method", validatedTx.task.GetMethod()),
+		attribute.StringSlice("task_args", validatedTx.task.GetArgs()),
+		attribute.String("task_id", validatedTx.task.GetId()),
+	)
 	defer func() {
-		log.Infof("task method %s task %s elapsed: %s", task.GetMethod(), task.GetId(), time.Since(start))
+		log.Infof("task method %s task %s elapsed: %s", validatedTx.task.GetMethod(), validatedTx.task.GetId(), time.Since(start))
 	}()
 
-	txCacheStub := batchCacheStub.NewTxCacheStub(task.GetId())
-	e.Chaincode.contract.SetStub(batchCacheStub)
-
-	span.AddEvent("validating tx sender method and args")
-	senderAddress, method, args, err := e.validatedTxSenderMethodAndArgs(traceCtx, batchCacheStub, task)
-	if err != nil {
-		err = fmt.Errorf("failed to validate transaction sender, method, and arguments for task %s: %w", task.GetId(), err)
-		return handleTaskError(span, task, err)
-	}
-
 	span.AddEvent("calling method")
-	response, err := e.Chaincode.InvokeContractMethod(traceCtx, txCacheStub, method, senderAddress, args)
+	response, err := e.Chaincode.InvokeContractMethod(traceCtx, validatedTx.txCacheStub, validatedTx.method, validatedTx.senderAddress, validatedTx.args)
 	if err != nil {
-		return handleTaskError(span, task, err)
+		return handleTaskError(span, validatedTx.task, err)
 	}
 
 	span.AddEvent("commit")
-	writes, events := txCacheStub.Commit()
+	writes, events := validatedTx.txCacheStub.Commit()
 
-	sort.Slice(txCacheStub.Accounting, func(i, j int) bool {
-		return strings.Compare(txCacheStub.Accounting[i].String(), txCacheStub.Accounting[j].String()) < 0
+	sort.Slice(validatedTx.txCacheStub.Accounting, func(i, j int) bool {
+		return strings.Compare(validatedTx.txCacheStub.Accounting[i].String(), validatedTx.txCacheStub.Accounting[j].String()) < 0
 	})
 
 	span.SetStatus(codes.Ok, "")
 	return &proto.TxResponse{
-			Id:     []byte(task.GetId()),
-			Method: task.GetMethod(),
+			Id:     []byte(validatedTx.task.GetId()),
+			Method: validatedTx.task.GetMethod(),
 			Writes: writes,
 		},
 		&proto.BatchTxEvent{
-			Id:         []byte(task.GetId()),
-			Method:     task.GetMethod(),
-			Accounting: txCacheStub.Accounting,
+			Id:         []byte(validatedTx.task.GetId()),
+			Method:     validatedTx.task.GetMethod(),
+			Accounting: validatedTx.txCacheStub.Accounting,
 			Events:     events,
 			Result:     response,
 		}

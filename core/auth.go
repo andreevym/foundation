@@ -53,7 +53,7 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 
 	invocation, err := parseInvocationDetails(method, args)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, fmt.Errorf("failed to parse invocation details: %s", err)
 	}
 
 	// Check the correspondence between the name and the channel of the chancode.
@@ -62,7 +62,7 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 		invocation.chaincodeNameArg,
 		invocation.channelNameArg,
 	); err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, fmt.Errorf("failed to validate chaincode and channel name: %s", err)
 	}
 
 	signers := invocation.signatureArgs[:invocation.signersCount]
@@ -70,7 +70,7 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 	// Check the ACL (access control list).
 	acl, err := checkACLSignerStatus(stub, signers)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, fmt.Errorf("failed to check ACL: %s", err)
 	}
 
 	oldBehavior := invocation.signersCount != len(acl.GetKeyTypes())
@@ -91,18 +91,18 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 	message := []byte(method.ChaincodeFunc + strings.Join(args[:len(args)-invocation.signersCount], ""))
 
 	if err = validateSignaturesInInvocation(invocation, message); err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, fmt.Errorf("failed to validate signatures in invocation: %s", err)
 	}
 
 	// Update the address if it has changed.
 	if err = helpers.AddAddrIfChanged(stub, acl.GetAddress()); err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, fmt.Errorf("failed to add address: %s", err)
 	}
 
 	// Convert nonce from a string to a number.
 	nonce, err = strconv.ParseUint(invocation.nonceStringArg, 10, 64)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, fmt.Errorf("failed to parse nonce: %s", err)
 	}
 
 	// Return the signer's address, method arguments, and nonce.
@@ -138,7 +138,7 @@ func validateSignaturesInInvocation(
 func checkACLSignerStatus(stub shim.ChaincodeStubInterface, signers []string) (*pb.AclResponse, error) {
 	acl, err := helpers.CheckACL(stub, signers)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to check ACL: %s", err)
 	}
 
 	// Check the status of the signer in the access control list.
