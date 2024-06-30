@@ -53,7 +53,7 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 
 	invocation, err := parseInvocationDetails(method, args)
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to parse invocation details: %s", err)
+		return nil, nil, 0, fmt.Errorf("failed to parse invocation details: %w", err)
 	}
 
 	// Check the correspondence between the name and the channel of the chancode.
@@ -62,7 +62,7 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 		invocation.chaincodeNameArg,
 		invocation.channelNameArg,
 	); err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to validate chaincode and channel name: %s", err)
+		return nil, nil, 0, fmt.Errorf("failed to validate chaincode and channel name: %w", err)
 	}
 
 	signers := invocation.signatureArgs[:invocation.signersCount]
@@ -70,7 +70,7 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 	// Check the ACL (access control list).
 	acl, err := checkACLSignerStatus(stub, signers)
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to check ACL: %s", err)
+		return nil, nil, 0, fmt.Errorf("failed to check ACL: %w", err)
 	}
 
 	oldBehavior := invocation.signersCount != len(acl.GetKeyTypes())

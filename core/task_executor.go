@@ -172,10 +172,6 @@ func (e *TaskExecutor) ExecuteTasks(
 	wg.Wait()
 
 	for id, validatedTx := range validatedTxsMap {
-		if validatedTx.err != nil {
-			break
-		}
-
 		span.AddEvent("validating and extracting invocation context")
 		senderAddress, args, nonce, err := e.Chaincode.validateAndExtractInvocationContext(e.BatchCacheStub, validatedTx.method, validatedTx.task.GetArgs())
 		if err != nil {
@@ -204,9 +200,8 @@ func (e *TaskExecutor) ExecuteTasks(
 			if !validatedTx.method.RequiresAuth || validatedTx.senderAddress == nil {
 				err := fmt.Errorf("failed to validate authorization for task %s: sender address is missing", validatedTx.task.GetId())
 				span.SetStatus(codes.Error, err.Error())
-				txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
-				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
-				batchEvent.Events = append(batchEvent.Events, txEvent)
+				validatedTx.err = err
+				checkResult <- &validatedTx
 				return
 			}
 			argsToValidate := append([]string{validatedTx.senderAddress.AddrString()}, validatedTx.args...)
@@ -215,9 +210,8 @@ func (e *TaskExecutor) ExecuteTasks(
 			if err := e.Chaincode.Router().Check(validatedTx.method.MethodName, argsToValidate...); err != nil {
 				err = fmt.Errorf("failed to validate arguments for task %s: %w", validatedTx.task.GetId(), err)
 				span.SetStatus(codes.Error, err.Error())
-				txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
-				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
-				batchEvent.Events = append(batchEvent.Events, txEvent)
+				validatedTx.err = err
+				checkResult <- &validatedTx
 				return
 			}
 
@@ -269,13 +263,6 @@ exit:
 	}
 
 	return batchResponse, batchEvent, nil
-}
-
-func (e *TaskExecutor) saveResult(batchResponse *proto.BatchResponse, txResponses *proto.TxResponse, batchEvent *proto.BatchEvent, txEvent *proto.BatchTxEvent) {
-	e.Lock()
-	defer e.Unlock()
-	batchResponse.TxResponses = append(batchResponse.TxResponses, txResponses)
-	batchEvent.Events = append(batchEvent.Events, txEvent)
 }
 
 // ExecuteTask processes an individual task, returning a transaction response and event.
