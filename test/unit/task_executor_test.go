@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/anoideaopen/foundation/core/logger"
 	"github.com/anoideaopen/foundation/mock"
@@ -59,6 +60,7 @@ func TestGroupTxExecutorEmitAndTransfer(t *testing.T) {
 }
 
 func BenchmarkTestGroupTxExecutorEmitAndTransfer(b *testing.B) {
+	b.StopTimer()
 	err := os.Setenv("CORE_CHAINCODE_LOGGING_LEVEL", "ERROR")
 	if err != nil {
 		b.Fatal(err)
@@ -103,15 +105,24 @@ func BenchmarkTestGroupTxExecutorEmitAndTransfer(b *testing.B) {
 	transferFn := "transfer"
 	emitAmount := "1"
 	reason := ""
-	countInBatch := 10
+	countInBatch := 130
 
+	// Artificial delay to update the nonce value.
+	time.Sleep(time.Millisecond * 5)
+
+	// Generation of nonce based on current time in milliseconds.
+	ms := time.Now().UnixNano() / 1000000
+
+	p := make([]PreparedTask, 0)
 	for i := 0; i < b.N; i++ {
 		var tasks []*proto.Task
 		for i := 0; i < countInBatch; i++ {
+			ms++
+			nonce := strconv.FormatInt(ms, 10)
 			args := []string{ledger.NewWallet().Address(), emitAmount, reason}
 			executorRequest := mock.NewExecutorRequest(channel, transferFn, args, true)
 			if executorRequest.IsSignedInvoke {
-				args = user1.SignArgs(executorRequest.Channel, executorRequest.Method, args...)
+				args = user1.WithNonceSignArgs(executorRequest.Channel, executorRequest.Method, nonce, args...)
 			}
 			task := &proto.Task{
 				Id:     strconv.FormatInt(rand.Int63(), 10),
@@ -120,6 +131,17 @@ func BenchmarkTestGroupTxExecutorEmitAndTransfer(b *testing.B) {
 			}
 			tasks = append(tasks, task)
 		}
-		_, err = user1.TasksExecutor(channel, transferFn, tasks)
+		p = append(p, PreparedTask{
+			tasks: tasks,
+		})
 	}
+
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		_, err = user1.TasksExecutor(channel, transferFn, p[i].tasks)
+	}
+}
+
+type PreparedTask struct {
+	tasks []*proto.Task
 }

@@ -156,7 +156,9 @@ func (e *TaskExecutor) ExecuteTasks(
 			if err != nil {
 				err = fmt.Errorf("failed to parse chaincode method '%s' for task %s: %w", task.GetMethod(), task.GetId(), err)
 				span.SetStatus(codes.Error, err.Error())
-				validatedTx.err = err
+				txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
+				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+				batchEvent.Events = append(batchEvent.Events, txEvent)
 				return
 			}
 
@@ -179,7 +181,9 @@ func (e *TaskExecutor) ExecuteTasks(
 		if err != nil {
 			err = fmt.Errorf("failed to validate and extract invocation context for task %s: %w", validatedTx.task.GetId(), err)
 			span.SetStatus(codes.Error, err.Error())
-			validatedTx.err = err
+			txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
+			batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+			batchEvent.Events = append(batchEvent.Events, txEvent)
 			break
 		}
 
@@ -189,10 +193,9 @@ func (e *TaskExecutor) ExecuteTasks(
 		validatedTxsMap[id] = validatedTx
 	}
 
+	checkResult := make(chan *ValidatedTx, len(validatedTxsMap))
+	defer close(checkResult)
 	for _, validatedTx := range validatedTxsMap {
-		if validatedTx.err != nil {
-			break
-		}
 		wg.Add(1)
 		go func(validatedTx ValidatedTx) {
 			defer wg.Done()
@@ -201,7 +204,9 @@ func (e *TaskExecutor) ExecuteTasks(
 			if !validatedTx.method.RequiresAuth || validatedTx.senderAddress == nil {
 				err := fmt.Errorf("failed to validate authorization for task %s: sender address is missing", validatedTx.task.GetId())
 				span.SetStatus(codes.Error, err.Error())
-				validatedTx.err = err
+				txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
+				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+				batchEvent.Events = append(batchEvent.Events, txEvent)
 				return
 			}
 			argsToValidate := append([]string{validatedTx.senderAddress.AddrString()}, validatedTx.args...)
@@ -210,46 +215,50 @@ func (e *TaskExecutor) ExecuteTasks(
 			if err := e.Chaincode.Router().Check(validatedTx.method.MethodName, argsToValidate...); err != nil {
 				err = fmt.Errorf("failed to validate arguments for task %s: %w", validatedTx.task.GetId(), err)
 				span.SetStatus(codes.Error, err.Error())
-				validatedTx.err = err
+				txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
+				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+				batchEvent.Events = append(batchEvent.Events, txEvent)
 				return
 			}
 
 			span.AddEvent("validating nonce")
 			validatedTx.sender = types.NewSenderFromAddr((*types.Address)(validatedTx.senderAddress))
 			validatedTx.args = validatedTx.args[:validatedTx.method.NumArgs-1]
-			m.Lock()
-			defer m.Unlock()
-			validatedTxsMap[validatedTx.task.Id] = validatedTx
+			checkResult <- &validatedTx
 		}(validatedTx)
 	}
 	wg.Wait()
+exit:
+	for {
+		select {
+		case validatedTx := <-checkResult:
+			if validatedTx.err != nil {
+				txResponse, txEvent := handleTaskError(span, validatedTx.task, validatedTx.err)
+				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+				batchEvent.Events = append(batchEvent.Events, txEvent)
+				delete(validatedTxsMap, validatedTx.task.GetId())
+			} else {
+				validatedTxsMap[validatedTx.task.Id] = *validatedTx
+			}
+		default:
+			break exit
+		}
+	}
 
 	for id, validatedTx := range validatedTxsMap {
-		if validatedTx.err != nil {
-			break
-		}
 		err := checkNonce(e.BatchCacheStub, validatedTx.sender, validatedTx.nonce)
 		if err != nil {
 			err = fmt.Errorf("failed to validate nonce for task %s, nonce %d: %w", validatedTx.task.GetId(), validatedTx.nonce, err)
 			span.SetStatus(codes.Error, err.Error())
-			validatedTx.err = err
-			validatedTxsMap[id] = validatedTx
+
+			txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
+			batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+			batchEvent.Events = append(batchEvent.Events, txEvent)
+			delete(validatedTxsMap, id)
 		}
 	}
 
 	for _, validatedTx := range validatedTxsMap {
-		if validatedTx.err == nil {
-			break
-		}
-		txResponse, txEvent := handleTaskError(span, validatedTx.task, validatedTx.err)
-		batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
-		batchEvent.Events = append(batchEvent.Events, txEvent)
-	}
-
-	for _, validatedTx := range validatedTxsMap {
-		if validatedTx.err != nil {
-			break
-		}
 		txResponse, txEvent := e.ExecuteTask(traceCtx, validatedTx)
 		batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
 		batchEvent.Events = append(batchEvent.Events, txEvent)
