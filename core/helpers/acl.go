@@ -135,7 +135,12 @@ func GetAddress(stub shim.ChaincodeStubInterface, keys string) (*pb.AclResponse,
 	}, "acl")
 
 	if resp.GetStatus() != http.StatusOK {
-		return nil, fmt.Errorf("failed to invoke chaincode status is not valid %d: %s", resp.GetStatus(), resp.GetMessage())
+		return nil, fmt.Errorf("ACL status is not OK: status code: '%d', message: '%s', payload '%s'. "+
+			"invoke chaincode chaincode name 'acl',"+
+			" method 'checkKeys', key '%v', channel 'acl'",
+			resp.GetStatus(), resp.GetMessage(), resp.GetPayload(),
+			keys,
+		)
 	}
 
 	if len(resp.GetPayload()) == 0 {
@@ -158,7 +163,12 @@ func GetFullAddress(stub shim.ChaincodeStubInterface, key string) (*pb.Address, 
 	}, "acl")
 
 	if resp.GetStatus() != http.StatusOK {
-		return nil, errors.New(resp.GetMessage())
+		return nil, fmt.Errorf("ACL status is not OK: status code: '%d', message: '%s', payload '%s'. "+
+			"invoke chaincode chaincode name 'acl',"+
+			" method 'checkAddress', key '%s', channel 'acl'",
+			resp.GetStatus(), resp.GetMessage(), resp.GetPayload(),
+			key,
+		)
 	}
 
 	if len(resp.GetPayload()) == 0 {
@@ -181,10 +191,10 @@ func GetAccountInfo(stub shim.ChaincodeStubInterface, addr string) (*pb.AccountI
 	}, "acl")
 
 	if resp.GetStatus() != http.StatusOK {
-		return nil, fmt.Errorf("ACL status is not OK: status code: %d, message: %s. "+
+		return nil, fmt.Errorf("ACL status is not OK: status code: '%d', message: '%s', payload '%s'. "+
 			"invoke chaincode chaincode name 'acl',"+
 			" method 'getAccountInfo', address '%s', channel 'acl'",
-			resp.GetStatus(), resp.GetMessage(),
+			resp.GetStatus(), resp.GetMessage(), resp.GetPayload(),
 			addr,
 		)
 	}
