@@ -1,8 +1,6 @@
 package core
 
 import (
-	"fmt"
-
 	"github.com/anoideaopen/foundation/core/contract"
 	"github.com/anoideaopen/foundation/core/telemetry"
 	"github.com/anoideaopen/foundation/proto"
@@ -48,7 +46,7 @@ func (cc *Chaincode) InvokeContractMethod(
 	result, err := cc.Router().Invoke(method.MethodName, cc.PrependSender(method, sender, args)...)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("invoke contract method: %w", err)
+		return nil, err
 	}
 
 	span.SetStatus(codes.Ok, "")
