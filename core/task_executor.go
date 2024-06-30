@@ -180,6 +180,7 @@ func (e *TaskExecutor) ExecuteTasks(
 			txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
 			batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
 			batchEvent.Events = append(batchEvent.Events, txEvent)
+			delete(validatedTxsMap, validatedTx.task.GetId())
 			break
 		}
 
@@ -226,7 +227,13 @@ exit:
 	for {
 		select {
 		case validatedTx := <-checkResult:
-			if validatedTx.err != nil {
+			if validatedTx.sender == nil {
+				err := fmt.Errorf("sendor is empty for task %s", validatedTx.task.GetId())
+				txResponse, txEvent := handleTaskError(span, validatedTx.task, err)
+				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+				batchEvent.Events = append(batchEvent.Events, txEvent)
+				delete(validatedTxsMap, validatedTx.task.GetId())
+			} else if validatedTx.err != nil {
 				txResponse, txEvent := handleTaskError(span, validatedTx.task, validatedTx.err)
 				batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
 				batchEvent.Events = append(batchEvent.Events, txEvent)

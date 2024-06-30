@@ -181,10 +181,11 @@ func GetAccountInfo(stub shim.ChaincodeStubInterface, addr string) (*pb.AccountI
 	}, "acl")
 
 	if resp.GetStatus() != http.StatusOK {
-		return nil, fmt.Errorf(
-			"ACL status is not OK: status code: %d, message: %s",
-			resp.GetStatus(),
-			resp.GetMessage(),
+		return nil, fmt.Errorf("ACL status is not OK: status code: %d, message: %s. "+
+			"invoke chaincode chaincode name 'acl',"+
+			" method 'getAccountInfo', address '%s', channel 'acl'",
+			resp.GetStatus(), resp.GetMessage(),
+			addr,
 		)
 	}
 

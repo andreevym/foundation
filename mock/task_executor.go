@@ -132,13 +132,7 @@ func (w *Wallet) getEventByID(channel string, id string) (*proto.BatchTxEvent, e
 	return nil, fmt.Errorf("failed to find event %s by id %s", core.ExecuteTasksEvent, id)
 }
 
-func getTxResponseByID(
-	batchResponse *proto.BatchResponse,
-	id string,
-) (
-	*proto.TxResponse,
-	error,
-) {
+func getTxResponseByID(batchResponse *proto.BatchResponse, id string) (*proto.TxResponse, error) {
 	for _, response := range batchResponse.GetTxResponses() {
 		if string(response.GetId()) == id {
 			return response, nil
