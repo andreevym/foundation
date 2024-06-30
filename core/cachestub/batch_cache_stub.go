@@ -1,8 +1,6 @@
 package cachestub
 
 import (
-	"sync"
-
 	"net/http"
 	"strings"
 
@@ -12,10 +10,6 @@ import (
 )
 
 type BatchCacheStub struct {
-	invokeResultCacheLock sync.Mutex
-	writeCacheLock        sync.Mutex
-	readCacheLock         sync.Mutex
-
 	shim.ChaincodeStubInterface
 	batchWriteCache   map[string]*proto.WriteElement
 	batchReadeCache   map[string]*proto.WriteElement
@@ -35,10 +29,6 @@ func NewBatchCacheStub(stub shim.ChaincodeStubInterface) *BatchCacheStub {
 
 // GetState returns state from BatchCacheStub cache or, if absent, from chaincode state
 func (bs *BatchCacheStub) GetState(key string) ([]byte, error) {
-	bs.readCacheLock.Lock()
-	defer bs.readCacheLock.Unlock()
-	bs.writeCacheLock.Lock()
-	defer bs.writeCacheLock.Unlock()
 	if existsElement, ok := bs.batchWriteCache[key]; ok {
 		return existsElement.GetValue(), nil
 	}
@@ -59,16 +49,12 @@ func (bs *BatchCacheStub) GetState(key string) ([]byte, error) {
 
 // PutState puts state to a BatchCacheStub cache
 func (bs *BatchCacheStub) PutState(key string, value []byte) error {
-	bs.writeCacheLock.Lock()
-	defer bs.writeCacheLock.Unlock()
 	bs.batchWriteCache[key] = &proto.WriteElement{Key: key, Value: value}
 	return nil
 }
 
 // Commit puts state from a BatchCacheStub cache to the chaincode state
 func (bs *BatchCacheStub) Commit() error {
-	bs.writeCacheLock.Lock()
-	defer bs.writeCacheLock.Unlock()
 	for key, element := range bs.batchWriteCache {
 		if element.GetIsDeleted() {
 			if err := bs.ChaincodeStubInterface.DelState(key); err != nil {
@@ -85,16 +71,11 @@ func (bs *BatchCacheStub) Commit() error {
 
 // DelState - marks state in BatchCacheStub cache as deleted
 func (bs *BatchCacheStub) DelState(key string) error {
-	bs.writeCacheLock.Lock()
-	defer bs.writeCacheLock.Unlock()
 	bs.batchWriteCache[key] = &proto.WriteElement{Key: key, IsDeleted: true}
 	return nil
 }
 
 func (bs *BatchCacheStub) InvokeChaincode(chaincodeName string, args [][]byte, channel string) pb.Response {
-	bs.invokeResultCacheLock.Lock()
-	defer bs.invokeResultCacheLock.Unlock()
-
 	keys := []string{channel, chaincodeName}
 	for _, arg := range args {
 		keys = append(keys, string(arg))

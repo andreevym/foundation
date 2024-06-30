@@ -31,6 +31,9 @@ type ValidatedTx struct {
 	method        contract.Method
 	args          []string
 	txCacheStub   *cachestub.TxCacheStub
+	nonce         uint64
+	err           error
+	sender        *types.Sender
 }
 
 // TaskExecutor handles the execution of a group of tasks.
@@ -131,37 +134,122 @@ func (e *TaskExecutor) ExecuteTasks(
 	batchResponse := &proto.BatchResponse{}
 	batchEvent := &proto.BatchEvent{}
 
-	validatedTxs := make([]ValidatedTx, 0)
+	validatedTxsMap := make(map[string]ValidatedTx)
 	wg := &sync.WaitGroup{}
 
 	// init router once
 	e.Chaincode.Router()
 
+	m := &sync.Mutex{}
 	for _, task := range tasks {
 		wg.Add(1)
 		go func(t *proto.Task) {
 			defer wg.Done()
-			span.AddEvent("validating tx sender method and args")
-			senderAddress, method, args, err := e.validatedTxSenderMethodAndArgs(traceCtx, e.BatchCacheStub, t)
-			if err != nil {
-				err = fmt.Errorf("failed to validate transaction sender, method, and arguments for task %s: %w", t.GetId(), err)
-				txResponses, txEvent := handleTaskError(span, t, err)
-				e.saveResult(batchResponse, txResponses, batchEvent, txEvent)
-			} else {
-				validatedTx := ValidatedTx{
-					task:          t,
-					senderAddress: senderAddress,
-					method:        method,
-					args:          args,
-					txCacheStub:   e.BatchCacheStub.NewTxCacheStub(t.GetId()),
-				}
-				validatedTxs = append(validatedTxs, validatedTx)
+
+			validatedTx := ValidatedTx{
+				task:        t,
+				txCacheStub: e.BatchCacheStub.NewTxCacheStub(t.GetId()),
 			}
+
+			span.AddEvent("parsing chaincode method")
+			method, err := e.Chaincode.Method(task.GetMethod())
+			if err != nil {
+				err = fmt.Errorf("failed to parse chaincode method '%s' for task %s: %w", task.GetMethod(), task.GetId(), err)
+				span.SetStatus(codes.Error, err.Error())
+				validatedTx.err = err
+				return
+			}
+
+			validatedTx.method = method
+
+			m.Lock()
+			defer m.Unlock()
+			validatedTxsMap[t.GetId()] = validatedTx
 		}(task)
 	}
 	wg.Wait()
 
-	for _, validatedTx := range validatedTxs {
+	for id, validatedTx := range validatedTxsMap {
+		if validatedTx.err != nil {
+			break
+		}
+
+		span.AddEvent("validating and extracting invocation context")
+		senderAddress, args, nonce, err := e.Chaincode.validateAndExtractInvocationContext(e.BatchCacheStub, validatedTx.method, validatedTx.task.GetArgs())
+		if err != nil {
+			err = fmt.Errorf("failed to validate and extract invocation context for task %s: %w", validatedTx.task.GetId(), err)
+			span.SetStatus(codes.Error, err.Error())
+			validatedTx.err = err
+			break
+		}
+
+		validatedTx.nonce = nonce
+		validatedTx.senderAddress = senderAddress
+		validatedTx.args = args
+		validatedTxsMap[id] = validatedTx
+	}
+
+	for _, validatedTx := range validatedTxsMap {
+		if validatedTx.err != nil {
+			break
+		}
+		wg.Add(1)
+		go func(validatedTx ValidatedTx) {
+			defer wg.Done()
+
+			span.AddEvent("validating authorization")
+			if !validatedTx.method.RequiresAuth || validatedTx.senderAddress == nil {
+				err := fmt.Errorf("failed to validate authorization for task %s: sender address is missing", validatedTx.task.GetId())
+				span.SetStatus(codes.Error, err.Error())
+				validatedTx.err = err
+				return
+			}
+			argsToValidate := append([]string{validatedTx.senderAddress.AddrString()}, validatedTx.args...)
+
+			span.AddEvent("validating arguments")
+			if err := e.Chaincode.Router().Check(validatedTx.method.MethodName, argsToValidate...); err != nil {
+				err = fmt.Errorf("failed to validate arguments for task %s: %w", validatedTx.task.GetId(), err)
+				span.SetStatus(codes.Error, err.Error())
+				validatedTx.err = err
+				return
+			}
+
+			span.AddEvent("validating nonce")
+			validatedTx.sender = types.NewSenderFromAddr((*types.Address)(validatedTx.senderAddress))
+			validatedTx.args = validatedTx.args[:validatedTx.method.NumArgs-1]
+			m.Lock()
+			defer m.Unlock()
+			validatedTxsMap[validatedTx.task.Id] = validatedTx
+		}(validatedTx)
+	}
+	wg.Wait()
+
+	for id, validatedTx := range validatedTxsMap {
+		if validatedTx.err != nil {
+			break
+		}
+		err := checkNonce(e.BatchCacheStub, validatedTx.sender, validatedTx.nonce)
+		if err != nil {
+			err = fmt.Errorf("failed to validate nonce for task %s, nonce %d: %w", validatedTx.task.GetId(), validatedTx.nonce, err)
+			span.SetStatus(codes.Error, err.Error())
+			validatedTx.err = err
+			validatedTxsMap[id] = validatedTx
+		}
+	}
+
+	for _, validatedTx := range validatedTxsMap {
+		if validatedTx.err == nil {
+			break
+		}
+		txResponse, txEvent := handleTaskError(span, validatedTx.task, validatedTx.err)
+		batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
+		batchEvent.Events = append(batchEvent.Events, txEvent)
+	}
+
+	for _, validatedTx := range validatedTxsMap {
+		if validatedTx.err != nil {
+			break
+		}
 		txResponse, txEvent := e.ExecuteTask(traceCtx, validatedTx)
 		batchResponse.TxResponses = append(batchResponse.TxResponses, txResponse)
 		batchEvent.Events = append(batchEvent.Events, txEvent)
@@ -179,58 +267,6 @@ func (e *TaskExecutor) saveResult(batchResponse *proto.BatchResponse, txResponse
 	defer e.Unlock()
 	batchResponse.TxResponses = append(batchResponse.TxResponses, txResponses)
 	batchEvent.Events = append(batchEvent.Events, txEvent)
-}
-
-// validatedTxSenderMethodAndArgs validates the sender, method, and arguments for a transaction.
-func (e *TaskExecutor) validatedTxSenderMethodAndArgs(
-	traceCtx telemetry.TraceContext,
-	batchCacheStub *cachestub.BatchCacheStub,
-	task *proto.Task,
-) (*proto.Address, contract.Method, []string, error) {
-	_, span := e.TracingHandler.StartNewSpan(traceCtx, "TaskExecutor.validatedTxSenderMethodAndArgs")
-	defer span.End()
-
-	span.AddEvent("parsing chaincode method")
-	method, err := e.Chaincode.Method(task.GetMethod())
-	if err != nil {
-		err = fmt.Errorf("failed to parse chaincode method '%s' for task %s: %w", task.GetMethod(), task.GetId(), err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, contract.Method{}, nil, err
-	}
-
-	span.AddEvent("validating and extracting invocation context")
-	senderAddress, args, nonce, err := e.Chaincode.validateAndExtractInvocationContext(batchCacheStub, method, task.GetArgs())
-	if err != nil {
-		err = fmt.Errorf("failed to validate and extract invocation context for task %s: %w", task.GetId(), err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, contract.Method{}, nil, err
-	}
-
-	span.AddEvent("validating authorization")
-	if !method.RequiresAuth || senderAddress == nil {
-		err = fmt.Errorf("failed to validate authorization for task %s: sender address is missing", task.GetId())
-		span.SetStatus(codes.Error, err.Error())
-		return nil, contract.Method{}, nil, err
-	}
-	argsToValidate := append([]string{senderAddress.AddrString()}, args...)
-
-	span.AddEvent("validating arguments")
-	if err = e.Chaincode.Router().Check(method.MethodName, argsToValidate...); err != nil {
-		err = fmt.Errorf("failed to validate arguments for task %s: %w", task.GetId(), err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, contract.Method{}, nil, err
-	}
-
-	span.AddEvent("validating nonce")
-	sender := types.NewSenderFromAddr((*types.Address)(senderAddress))
-	err = checkNonce(batchCacheStub, sender, nonce)
-	if err != nil {
-		err = fmt.Errorf("failed to validate nonce for task %s, nonce %d: %w", task.GetId(), nonce, err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, contract.Method{}, nil, err
-	}
-
-	return senderAddress, method, args[:method.NumArgs-1], nil
 }
 
 // ExecuteTask processes an individual task, returning a transaction response and event.

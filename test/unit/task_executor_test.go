@@ -106,12 +106,8 @@ func BenchmarkTestGroupTxExecutorEmitAndTransfer(b *testing.B) {
 	countInBatch := 10
 
 	for i := 0; i < b.N; i++ {
-		//wg := sync.WaitGroup{}
 		var tasks []*proto.Task
 		for i := 0; i < countInBatch; i++ {
-			//wg.Add(1)
-			//go func() {
-			//	defer wg.Done()
 			args := []string{ledger.NewWallet().Address(), emitAmount, reason}
 			executorRequest := mock.NewExecutorRequest(channel, transferFn, args, true)
 			if executorRequest.IsSignedInvoke {
@@ -123,9 +119,7 @@ func BenchmarkTestGroupTxExecutorEmitAndTransfer(b *testing.B) {
 				Args:   args,
 			}
 			tasks = append(tasks, task)
-			//}()
 		}
-		//wg.Wait()
 		_, err = user1.TasksExecutor(channel, transferFn, tasks)
 	}
 }
