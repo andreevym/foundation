@@ -91,18 +91,18 @@ func (cc *Chaincode) validateAndExtractInvocationContext(
 	message := []byte(method.ChaincodeFunc + strings.Join(args[:len(args)-invocation.signersCount], ""))
 
 	if err = validateSignaturesInInvocation(invocation, message); err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to validate signatures in invocation: %s", err)
+		return nil, nil, 0, fmt.Errorf("failed to validate signatures in invocation: %w", err)
 	}
 
 	// Update the address if it has changed.
 	if err = helpers.AddAddrIfChanged(stub, acl.GetAddress()); err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to add address: %s", err)
+		return nil, nil, 0, fmt.Errorf("failed to add address: %w", err)
 	}
 
 	// Convert nonce from a string to a number.
 	nonce, err = strconv.ParseUint(invocation.nonceStringArg, 10, 64)
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("failed to parse nonce: %s", err)
+		return nil, nil, 0, fmt.Errorf("failed to parse nonce: %w", err)
 	}
 
 	// Return the signer's address, method arguments, and nonce.

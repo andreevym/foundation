@@ -232,7 +232,7 @@ exit:
 				batchEvent.Events = append(batchEvent.Events, txEvent)
 				delete(validatedTxsMap, validatedTx.task.GetId())
 			} else {
-				validatedTxsMap[validatedTx.task.Id] = *validatedTx
+				validatedTxsMap[validatedTx.task.GetId()] = *validatedTx
 			}
 		default:
 			break exit
