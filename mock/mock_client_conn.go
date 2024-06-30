@@ -52,7 +52,7 @@ func (m *MockClientConn) Invoke(ctx context.Context, method string, args interfa
 
 	md := sd.Methods().ByName(protoreflect.Name(methodName))
 	if md == nil {
-		panic("method not found")
+		panic(fmt.Sprintf("method not found: '%s'", methodName))
 	}
 
 	var resp TxResponse
