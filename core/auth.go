@@ -138,7 +138,7 @@ func validateSignaturesInInvocation(
 func checkACLSignerStatus(stub shim.ChaincodeStubInterface, signers []string) (*pb.AclResponse, error) {
 	acl, err := helpers.CheckACL(stub, signers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check ACL: %s", err)
+		return nil, fmt.Errorf("failed to check ACL: %w", err)
 	}
 
 	// Check the status of the signer in the access control list.
